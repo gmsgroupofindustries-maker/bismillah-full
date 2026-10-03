@@ -1,0 +1,7 @@
+{
+  "name": "Bismillah Motors - Genuine Bike Parts & Stickers Bangladesh",
+  "description": "Production-ready full-stack e-commerce store for Bismillah Motors in Jashore, Bangladesh. Shop genuine Yamaha, Suzuki, TVS motorcycle parts, chain sprockets, brake pads, electricals, and stickers with Cash on Delivery and WhatsApp ordering.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
