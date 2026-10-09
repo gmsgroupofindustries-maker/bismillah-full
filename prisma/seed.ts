@@ -6,9 +6,9 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Starting database seeding for Bismillah Motors...');
 
-  // 1. Seed Admin User
+  // 1. Seed Admin Users
   const adminPassword = await bcrypt.hash('admin123456', 10);
-  const adminUser = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email: 'admin@bismillahmotors.com' },
     update: {
       passwordHash: adminPassword,
@@ -22,7 +22,22 @@ async function main() {
       role: 'ADMIN',
     },
   });
-  console.log('✅ Admin user created/verified:', adminUser.email);
+
+  await prisma.user.upsert({
+    where: { email: 'gmsgroupofindustries@gmail.com' },
+    update: {
+      passwordHash: adminPassword,
+      name: 'Store Owner Admin',
+      role: 'ADMIN',
+    },
+    create: {
+      email: 'gmsgroupofindustries@gmail.com',
+      passwordHash: adminPassword,
+      name: 'Store Owner Admin',
+      role: 'ADMIN',
+    },
+  });
+  console.log('✅ Admin users created/verified: admin@bismillahmotors.com, gmsgroupofindustries@gmail.com');
 
   // 2. Seed Categories
   const categoriesData = [

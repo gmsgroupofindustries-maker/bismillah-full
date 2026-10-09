@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { adminLogin, adminGoogleLogin } from '../../lib/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
-import { Lock, Mail, Key, AlertCircle, Loader2, X, ShieldCheck } from 'lucide-react';
+import { Lock, Mail, Key, AlertCircle, Loader2, X, Eye, EyeOff } from 'lucide-react';
 
 interface AdminLoginModalProps {
   isOpen: boolean;
@@ -15,8 +15,9 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   onLoginSuccess,
 }) => {
   const { currentUser, signInWithGoogle } = useAuth();
-  const [email, setEmail] = useState('admin@bismillahmotors.com');
-  const [password, setPassword] = useState('admin123456');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -32,7 +33,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       onLoginSuccess(data.user);
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Login failed. Please check your credentials.');
+      setError(err.message || 'Invalid administrator email or password.');
     } finally {
       setLoading(false);
     }
@@ -45,14 +46,13 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       let activeEmail = currentUser?.email;
       if (!activeEmail) {
         await signInWithGoogle();
-        // After popup, currentUser might update or we can retry
         activeEmail = 'gmsgroupofindustries@gmail.com';
       }
       const data = await adminGoogleLogin(activeEmail || 'gmsgroupofindustries@gmail.com');
       onLoginSuccess(data.user);
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Google Admin authentication failed.');
+      setError(err.message || 'Google Administrator authentication failed.');
     } finally {
       setLoading(false);
     }
@@ -63,7 +63,8 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       <div className="relative bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden my-auto p-6 sm:p-8 space-y-5">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 p-1 rounded-full cursor-pointer"
+          className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 p-1 rounded-full cursor-pointer transition-colors"
+          aria-label="Close modal"
         >
           <X className="w-5 h-5" />
         </button>
@@ -72,11 +73,11 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           <div className="w-12 h-12 bg-red-100 text-red-600 rounded-xl flex items-center justify-center mx-auto shadow-inner">
             <Lock className="w-6 h-6" />
           </div>
-          <h2 className="text-xl font-black text-gray-900 uppercase">
-            Bismillah Motors Admin
+          <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">
+            Admin Portal
           </h2>
           <p className="text-xs text-gray-500">
-            Secure administrative console for orders and inventory
+            Secure administrative console for inventory, products & orders
           </p>
         </div>
 
@@ -87,12 +88,12 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           </div>
         )}
 
-        {/* Quick Google Admin Login */}
+        {/* Quick Google Admin Login for Store Owner */}
         <button
           type="button"
           onClick={handleGoogleAdminLogin}
           disabled={loading}
-          className="w-full py-2.5 px-4 rounded-xl border border-gray-300 hover:border-red-400 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-xs transition-all flex items-center justify-center gap-3 cursor-pointer shadow-2xs"
+          className="w-full py-2.5 px-4 rounded-xl border border-gray-300 hover:border-red-500 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-xs transition-all flex items-center justify-center gap-3 cursor-pointer shadow-2xs"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24">
             <path
@@ -117,7 +118,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
 
         <div className="relative flex py-1 items-center">
           <div className="grow border-t border-gray-200"></div>
-          <span className="shrink mx-3 text-[11px] text-gray-400 uppercase tracking-widest font-semibold">Or with credentials</span>
+          <span className="shrink mx-3 text-[11px] text-gray-400 uppercase tracking-widest font-semibold">Or enter credentials</span>
           <div className="grow border-t border-gray-200"></div>
         </div>
 
@@ -130,9 +131,10 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               <input
                 type="email"
                 required
+                placeholder="admin@bismillahmotorsbd.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-300 focus:outline-hidden focus:border-red-600"
+                className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-300 focus:outline-hidden focus:border-red-600 text-gray-900 bg-white"
               />
               <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             </div>
@@ -144,23 +146,22 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             </label>
             <div className="relative">
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
+                placeholder="••••••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-300 focus:outline-hidden focus:border-red-600"
+                className="w-full pl-9 pr-10 py-2.5 rounded-lg border border-gray-300 focus:outline-hidden focus:border-red-600 text-gray-900 bg-white"
               />
               <Key className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer p-0.5"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
-          </div>
-
-          {/* Seeded credentials helper hint */}
-          <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-[11px] text-gray-600 space-y-1">
-            <div className="font-semibold text-gray-800 flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" /> Authorized Admin Accounts:
-            </div>
-            <div>Email: <code className="bg-white px-1 py-0.5 rounded border border-gray-300 text-gray-800">gmsgroupofindustries@gmail.com</code> or <code className="bg-white px-1 py-0.5 rounded border border-gray-300 text-gray-800">admin@bismillahmotors.com</code></div>
-            <div>Password: <code className="bg-white px-1 py-0.5 rounded border border-gray-300 text-gray-800">admin123456</code></div>
           </div>
 
           <button
