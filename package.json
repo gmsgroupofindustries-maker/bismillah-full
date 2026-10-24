@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
-    "build": "prisma generate && vite build",
+    "build": "prisma generate && vite build && mkdir -p dist/api && cp -r backend/api/* dist/api/ && cp backend/schema.sql dist/schema.sql && cp README.md dist/README.md",
     "postinstall": "prisma generate",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

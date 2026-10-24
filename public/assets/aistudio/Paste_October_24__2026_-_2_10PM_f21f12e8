@@ -1,0 +1,889 @@
+---
+
+# Rebuild "Bismillah Motors" as a cPanel-Deployable Full-Stack App (React + PHP/MySQL)
+
+## Project context
+
+You are regenerating an existing e-commerce site called **Bismillah Motors** (a motorcycle parts & stickers store in Jashore, Bangladesh). The current version is deployed at https://bismillah-full.onrender.com and uses React + Vite + Tailwind on the frontend and Node.js/Express on the backend.
+
+**The problem:** The current backend requires Node.js, which most cheap shared cPanel hosting plans do NOT support. The static-only zip that was previously produced is missing the backend entirely, so order placement, admin login, and order tracking all fail on cPanel.
+
+**Your task:** Rebuild the app so the frontend stays React/Vite, but the backend becomes **pure PHP 8 + MySQL/MariaDB**. The final deliverable is a downloadable ZIP produced by a GitHub Actions workflow, structured so the user can extract it directly into cPanel's `public_html/` folder and have everything work end-to-end after importing a SQL schema and editing one config file.
+
+---
+
+## Target deployment environment
+
+- **Hosting:** Standard shared cPanel hosting (Hostinger, Namecheap, Bluehost, A2, etc.)
+- **Server stack:** Apache + PHP 7.4 or 8.x + MySQL/MariaDB
+- **No Node.js available on the server** (only used during the GitHub Actions build)
+- **No Composer available** — PHP must be written by hand using only built-in extensions (PDO, json, hash, openssl)
+- **Single domain, single origin** — frontend and API both served from `public_html/`
+
+---
+
+## Final ZIP structure (what the GitHub Actions workflow must produce)
+
+When the user extracts `bismillah-motors-cpanel.zip`, they get a single folder named `bismillah-motors-cpanel/` containing:
+
+```
+bismillah-motors-cpanel/
+├── .htaccess                    # Apache routing: /api/* → api/index.php, everything else → index.html
+├── index.html                   # Built React app entry
+├── assets/
+│   ├── index-[hash].js          # Vite production bundle
+│   └── index-[hash].css         # Tailwind 4 production CSS
+├── logo.jpg                     # Store logo
+├── data/                        # Static JSON fallback data (used when API is unreachable)
+│   ├── products.json
+│   ├── categories.json
+│   ├── brands.json
+│   ├── bike-brands.json
+│   └── districts.json
+├── schema.sql                   # MySQL schema + seed data (import via phpMyAdmin)
+├── README.md                    # Step-by-step cPanel setup instructions
+└── api/                         # Pure PHP backend (entire folder)
+    ├── index.php                # Front controller / router
+    ├── config.php               # DB credentials, JWT secret, admin email (USER EDITS THIS)
+    ├── db.php                   # PDO connection helper
+    ├── helpers.php              # JSON response, input parsing, JWT encode/decode
+    ├── middleware/
+    │   └── auth.php             # Validates Bearer token, sets $GLOBALS['current_user']
+    └── routes/
+        ├── products.php         # GET/POST/PUT/DELETE /products
+        ├── orders.php           # POST /orders, GET /orders/track/:id, PATCH /orders/:id/status
+        ├── auth.php             # POST /auth/login, POST /auth/google-admin
+        ├── categories.php       # GET /categories
+        ├── brands.php           # GET /brands
+        └── bike_brands.php      # GET /bike-brands
+```
+
+The user uploads the contents of `bismillah-motors-cpanel/` directly into `public_html/`.
+
+---
+
+## Repository structure (what you generate)
+
+```
+bismillah-motors/
+├── .github/
+│   └── workflows/
+│       └── build.yml            # Builds frontend, bundles PHP, uploads ZIP as artifact
+├── frontend/                    # React + Vite + TypeScript + Tailwind 4
+│   ├── package.json
+│   ├── package-lock.json (commit if present)
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   ├── index.html
+│   ├── public/
+│   │   ├── logo.jpg
+│   │   └── data/
+│   │       ├── products.json
+│   │       ├── categories.json
+│   │       ├── brands.json
+│   │       ├── bike-brands.json
+│   │       └── districts.json
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx
+│       ├── index.css            # Tailwind 4 entry
+│       ├── lib/
+│       │   ├── api.ts           # API client (calls /api/*)
+│       │   ├── firebase.ts      # Firebase init
+│       │   └── utils.ts
+│       ├── contexts/
+│       │   └── AuthContext.tsx  # Google sign-in (existing flow)
+│       └── components/
+│           ├── Header.tsx
+│           ├── Footer.tsx
+│           ├── ProductCard.tsx
+│           ├── ProductGrid.tsx
+│           ├── ProductDetail.tsx
+│           ├── CartDrawer.tsx
+│           ├── CheckoutModal.tsx
+│           ├── OrderTracker.tsx
+│           ├── AdminLoginModal.tsx
+│           ├── AdminDashboard.tsx
+│           ├── FilterSidebar.tsx
+│           └── Logo.tsx
+├── backend/
+│   ├── api/
+│   │   ├── index.php
+│   │   ├── config.php
+│   │   ├── db.php
+│   │   ├── helpers.php
+│   │   ├── middleware/auth.php
+│   │   └── routes/
+│   │       ├── products.php
+│   │       ├── orders.php
+│   │       ├── auth.php
+│   │       ├── categories.php
+│   │       ├── brands.php
+│   │       └── bike_brands.php
+│   ├── schema.sql
+│   └── .htaccess.template       # The .htaccess that ends up in public_html/
+└── README.md
+```
+
+---
+
+## Non-negotiable architecture rules
+
+1. **Backend language: PHP 7.4+/8.x with PDO + MySQL/MariaDB only.** No Node.js, no Composer, no Symfony, no Laravel. Pure procedural PHP with PDO.
+2. **Frontend: React 18 + Vite + TypeScript + Tailwind CSS 4** — same look as the existing site.
+3. **Single origin:** both `https://yourdomain.com/` (frontend) and `https://yourdomain.com/api/*` (backend) live on the same Apache server, same domain. No cross-origin CORS needed.
+4. **`.htaccess` must:**
+   - Route `^api/(.*)$` → `api/index.php` (passing the rest of the path as `$_SERVER['PATH_INFO']` or a `?path=` query param)
+   - Route all non-file, non-directory requests → `/index.html` (SPA fallback for React Router)
+   - Enable gzip via `mod_deflate`
+   - Set long-cache headers on `assets/*` and `data/*`
+   - Set `Cache-Control: no-cache` on `index.html`
+   - Add security headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`
+5. **No Composer.** Write all PHP by hand. For JWT, use a hand-rolled HMAC-SHA256 implementation (base64url header + base64url payload + HMAC-SHA256 signature with the secret from `config.php`).
+6. **All SQL via prepared statements** with `PDO::prepare` + `bindValue`. Zero string concatenation in queries.
+7. **All user input** is validated server-side (required fields, types, lengths) before DB writes.
+8. **Passwords** hashed with `password_hash($pw, PASSWORD_BCRYPT)`, verified with `password_verify()`.
+9. **No `eval`, `exec`, `system`, `shell_exec`, `passthru`** anywhere.
+10. **PHP 7.4 compatibility:** Avoid constructor promotion, named arguments, enums, readonly properties. Use null coalescing `??`, arrow functions `fn() =>`, typed properties — all fine.
+11. **Image uploads** (if implemented): go to `uploads/`, validated by MIME type AND file extension, renamed to a random hash, max 2 MB.
+
+---
+
+## API contract (must match exactly — the React app already calls these endpoints)
+
+### Public endpoints (no auth)
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/api/products?limit=100&category=&brand=&bike_brand=&search=&min_price=&max_price=&page=` | `{products: [...], total, page}` |
+| GET | `/api/products/:id` | `{product: {...}}` |
+| GET | `/api/categories` | `{categories: [...]}` |
+| GET | `/api/brands` | `{brands: [...]}` |
+| GET | `/api/bike-brands` | `{bikeBrands: [...]}` |
+| GET | `/api/orders/track/:id` | `{order: {...}, items: [...]}` |
+
+### Customer endpoints (no auth, used during checkout)
+
+| Method | Path | Body | Returns |
+|--------|------|------|---------|
+| POST | `/api/orders` | `{customer: {name, phone, address, district}, items: [{id, name, price, qty}], total, paymentMethod: "cod"}` | `{orderId, message, whatsappUrl}` |
+
+`whatsappUrl` should be a prefilled WhatsApp message URL (`https://wa.me/8801974060224?text=...`) containing the order summary — the customer can tap to confirm via WhatsApp.
+
+### Admin endpoints (require `Authorization: Bearer <token>`)
+
+| Method | Path | Body | Returns |
+|--------|------|------|---------|
+| POST | `/api/auth/login` | `{email, password}` | `{token, user: {email, role}}` |
+| POST | `/api/auth/google-admin` | `{email, firebaseIdToken}` | `{token, user: {email, role}}` |
+| PATCH | `/api/orders/:id/status` | `{status: "pending\|confirmed\|shipped\|delivered\|cancelled"}` | `{order: {...}}` |
+| PUT | `/api/products/:id/stock` | `{stock: int}` | `{product: {...}}` |
+| POST | `/api/products` | product object | `{product: {...}}` |
+| PUT | `/api/products/:id` | product object | `{product: {...}}` |
+| DELETE | `/api/products/:id` | — | `{success: true}` |
+
+---
+
+## Token strategy
+
+### Email/password admin login (`POST /api/auth/login`)
+1. Receive `{email, password}`.
+2. Look up `admins WHERE email = ?`.
+3. If found, `password_verify($password, $row['password_hash'])`.
+4. If valid, issue a JWT-like token: `base64url(header).base64url(payload).HMAC-SHA256(header.payload, JWT_SECRET)`.
+   - Payload: `{email, role: "admin", exp: time() + 86400 * 7}` (7-day expiry).
+5. Return `{token, user: {email, role: "admin"}}`.
+
+### Google-admin login (`POST /api/auth/google-admin`)
+1. Receive `{email, firebaseIdToken}`.
+2. Verify the Firebase ID token by calling `https://oauth2.googleapis.com/tokeninfo?id_token=<firebaseIdToken>` via `file_get_contents` (or `curl`).
+3. Check that the returned `email` matches the request body `email`.
+4. Check that the email exists in the `admins` table, OR matches the `ADMIN_EMAIL` constant in `config.php` (i.e. `gmsgroupofindustries@gmail.com`).
+5. Issue the same HMAC token as above.
+6. Return `{token, user: {email, role: "admin"}}`.
+
+### Admin middleware (`middleware/auth.php`)
+1. Read `Authorization` header. If missing or not `Bearer <token>`, return 401.
+2. Split token, recompute HMAC, compare with `hash_equals()`. If invalid → 401.
+3. Check `exp` > `time()`. If expired → 401.
+4. Set `$GLOBALS['current_user'] = ['email' => ..., 'role' => 'admin']`.
+5. Continue to the route handler.
+
+---
+
+## Database schema (`backend/schema.sql`)
+
+```sql
+SET FOREIGN_KEY_CHECKS = 0;
+
+CREATE TABLE IF NOT EXISTS categories (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  image VARCHAR(255),
+  sort_order INT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS brands (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  logo VARCHAR(255),
+  sort_order INT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS bike_brands (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  slug VARCHAR(100) NOT NULL UNIQUE,
+  sort_order INT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS products (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  slug VARCHAR(255) NOT NULL UNIQUE,
+  description TEXT,
+  price DECIMAL(10,2) NOT NULL,
+  stock INT DEFAULT 0,
+  category_id INT,
+  brand_id INT,
+  bike_brand_id INT,
+  image VARCHAR(255),
+  images JSON,
+  sku VARCHAR(100),
+  is_featured TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
+  FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE SET NULL,
+  FOREIGN KEY (bike_brand_id) REFERENCES bike_brands(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  customer_name VARCHAR(255) NOT NULL,
+  customer_phone VARCHAR(50) NOT NULL,
+  customer_address TEXT NOT NULL,
+  district VARCHAR(100),
+  total DECIMAL(10,2) NOT NULL,
+  payment_method VARCHAR(50) DEFAULT 'cod',
+  status VARCHAR(50) DEFAULT 'pending',
+  notes TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_status (status),
+  INDEX idx_phone (customer_phone)
+);
+
+CREATE TABLE IF NOT EXISTS order_items (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id INT NOT NULL,
+  product_id INT,
+  product_name VARCHAR(255) NOT NULL,
+  price DECIMAL(10,2) NOT NULL,
+  qty INT NOT NULL,
+  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS admins (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  role VARCHAR(50) DEFAULT 'admin',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- Default admin: email admin@bismillahmotorsbd.com, password admin123
+-- bcrypt hash for "admin123" (regenerate this with: php -r "echo password_hash('admin123', PASSWORD_BCRYPT);")
+INSERT INTO admins (email, password_hash, role) VALUES
+  ('admin@bismillahmotorsbd.com', '$2y$10$REPLACE_WITH_GENERATED_BCRYPT_HASH', 'admin'),
+  ('gmsgroupofindustries@gmail.com', '$2y$10$REPLACE_WITH_GENERATED_BCRYPT_HASH', 'admin')
+ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash);
+
+-- Seed categories (mirror data/categories.json)
+INSERT INTO categories (name, slug, sort_order) VALUES
+  ('Engine Parts', 'engine-parts', 1),
+  ('Brakes', 'brakes', 2),
+  ('Chain & Sprockets', 'chain-sprockets', 3),
+  ('Electricals', 'electricals', 4),
+  ('Body Parts', 'body-parts', 5),
+  ('Stickers & Graphics', 'stickers-graphics', 6),
+  ('Suspension', 'suspension', 7),
+  ('Exhaust', 'exhaust', 8),
+  ('Tyres & Wheels', 'tyres-wheels', 9),
+  ('Accessories', 'accessories', 10);
+
+-- Seed brands
+INSERT INTO brands (name, slug, sort_order) VALUES
+  ('Yamaha', 'yamaha', 1),
+  ('Suzuki', 'suzuki', 2),
+  ('TVS', 'tvs', 3),
+  ('Honda', 'honda', 4),
+  ('Bajaj', 'bajaj', 5),
+  ('Hero', 'hero', 6),
+  ('Generic', 'generic', 99);
+
+-- Seed bike brands
+INSERT INTO bike_brands (name, slug, sort_order) VALUES
+  ('Yamaha', 'yamaha', 1),
+  ('Suzuki', 'suzuki', 2),
+  ('TVS', 'tvs', 3),
+  ('Honda', 'honda', 4),
+  ('Bajaj', 'bajaj', 5),
+  ('Hero', 'hero', 6);
+
+-- Seed at least 20 sample products mirroring frontend/public/data/products.json
+-- (Use the same products that already exist in the JSON file — convert each into an INSERT.)
+```
+
+The schema.sql must be importable via phpMyAdmin's "Import" tab.
+
+---
+
+## PHP backend implementation details
+
+### `api/index.php` (front controller)
+
+```php
+<?php
+// CORS headers (same-origin, but harmless to set)
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Content-Type: application/json; charset=utf-8');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
+require __DIR__ . '/config.php';
+require __DIR__ . '/db.php';
+require __DIR__ . '/helpers.php';
+
+// .htaccess routes /api/foo/bar → index.php?path=foo/bar
+$path = $_GET['path'] ?? '';
+$path = trim($path, '/');
+$method = $_SERVER['REQUEST_METHOD'];
+$segments = $path ? explode('/', $path) : [];
+
+// Routing table
+switch (true) {
+    case $segments[0] === 'products':
+        require __DIR__ . '/routes/products.php';
+        handle_products($method, $segments);
+        break;
+    case $segments[0] === 'orders':
+        require __DIR__ . '/routes/orders.php';
+        handle_orders($method, $segments);
+        break;
+    case $segments[0] === 'auth':
+        require __DIR__ . '/routes/auth.php';
+        handle_auth($method, $segments);
+        break;
+    case $segments[0] === 'categories':
+        require __DIR__ . '/routes/categories.php';
+        handle_categories($method, $segments);
+        break;
+    case $segments[0] === 'brands':
+        require __DIR__ . '/routes/brands.php';
+        handle_brands($method, $segments);
+        break;
+    case $segments[0] === 'bike-brands':
+        require __DIR__ . '/routes/bike_brands.php';
+        handle_bike_brands($method, $segments);
+        break;
+    default:
+        http_response_code(404);
+        echo json_encode(['error' => 'Not found', 'path' => $path]);
+}
+```
+
+### `api/config.php` (USER EDITS THIS after upload)
+
+```php
+<?php
+// === EDIT THESE AFTER UPLOADING TO CPANEL ===
+// cPanel → MySQL Databases → create a DB + user, grant all privileges, then paste here:
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'yourcpaneluser_bismillah');
+define('DB_USER', 'yourcpaneluser_bismillah_user');
+define('DB_PASS', 'your-strong-password-here');
+
+// JWT secret — generate once with: php -r "echo bin2hex(random_bytes(32));"
+// and paste the result here. Keep this private!
+define('JWT_SECRET', 'CHANGE_ME_TO_A_RANDOM_64_CHAR_HEX_STRING');
+
+// Owner / super-admin email (also used for Google one-click admin login)
+define('ADMIN_EMAIL', 'gmsgroupofindustries@gmail.com');
+
+// Store contact info (used by WhatsApp order URL)
+define('STORE_PHONE', '8801974060224');
+```
+
+### `api/helpers.php` (key functions)
+
+```php
+<?php
+function json_response($data, $status = 200) {
+    http_response_code($status);
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function get_json_body() {
+    $raw = file_get_contents('php://input');
+    $data = json_decode($raw, true);
+    return is_array($data) ? $data : [];
+}
+
+function base64url_encode($data) {
+    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+}
+
+function base64url_decode($data) {
+    return base64_decode(strtr($data, '-_', '+/'));
+}
+
+function jwt_encode($payload) {
+    $header = base64url_encode(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
+    $body = base64url_encode(json_encode($payload));
+    $sig = hash_hmac('sha256', $header . '.' . $body, JWT_SECRET, true);
+    return $header . '.' . $body . '.' . base64url_encode($sig);
+}
+
+function jwt_decode($token) {
+    $parts = explode('.', $token);
+    if (count($parts) !== 3) return null;
+    [$header, $body, $sig] = $parts;
+    $expected = base64url_encode(hash_hmac('sha256', $header . '.' . $body, JWT_SECRET, true));
+    if (!hash_equals($expected, $sig)) return null;
+    $payload = json_decode(base64url_decode($body), true);
+    if (!is_array($payload)) return null;
+    if (isset($payload['exp']) && $payload['exp'] < time()) return null;
+    return $payload;
+}
+```
+
+### `api/middleware/auth.php`
+
+```php
+<?php
+require_once __DIR__ . '/../helpers.php';
+
+function require_admin() {
+    $headers = getallheaders();
+    $auth = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+    if (!preg_match('/^Bearer\s+(.+)$/i', $auth, $m)) {
+        json_response(['error' => 'Missing or invalid Authorization header'], 401);
+    }
+    $payload = jwt_decode($m[1]);
+    if (!$payload || ($payload['role'] ?? '') !== 'admin') {
+        json_response(['error' => 'Invalid or expired token'], 401);
+    }
+    $GLOBALS['current_user'] = $payload;
+    return $payload;
+}
+```
+
+### `.htaccess` (goes in `public_html/`)
+
+```apache
+# SPA + PHP API routing for cPanel shared hosting
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Route /api/* to api/index.php (pass the rest of the path as ?path=)
+  RewriteRule ^api/?$ api/index.php [QSA,L]
+  RewriteRule ^api/(.+)$ api/index.php?path=$1 [QSA,L]
+
+  # SPA fallback: serve index.html for everything that isn't a real file/dir
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} !^/api/
+  RewriteRule . /index.html [L]
+</IfModule>
+
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType application/json .json
+  AddType image/webp .webp
+  AddType image/svg+xml .svg .svgz
+  AddType font/woff2 .woff2
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/plain application/javascript application/json image/svg+xml
+</IfModule>
+
+<IfModule mod_expires.c>
+  ExpiresActive On
+  <FilesMatch "index\.html$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+  ExpiresByType image/jpg "access plus 1 year"
+  ExpiresByType image/jpeg "access plus 1 year"
+  ExpiresByType image/png "access plus 1 year"
+  ExpiresByType image/webp "access plus 1 year"
+  ExpiresByType text/css "access plus 1 year"
+  ExpiresByType application/javascript "access plus 1 year"
+  ExpiresByType font/woff2 "access plus 1 year"
+  ExpiresByType application/json "access plus 1 hour"
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Block direct access to sensitive files
+<FilesMatch "(^\.|composer\.json|package\.json|package-lock\.json|\.env|config\.php$)">
+  Require all denied
+</FilesMatch>
+```
+
+---
+
+## React frontend requirements
+
+### Keep all existing functionality
+- Product grid with search, category/brand/bike-brand filters, price filter, pagination
+- Product detail page
+- Cart drawer (slide-in)
+- Checkout modal (Cash on Delivery + WhatsApp ordering with prefilled message)
+- Order tracking page
+- Admin portal (login modal → dashboard with stats, orders, products)
+- Firebase Google sign-in for customer accounts (existing flow stays unchanged)
+- Admin email/password login (calls `POST /api/auth/login`)
+- Admin "One-Click Google Login" (calls `POST /api/auth/google-admin` with the Firebase ID token)
+
+### API client (`src/lib/api.ts`)
+
+```typescript
+const API_BASE = '/api';
+
+function authHeader(): Record<string, string> {
+  const token = localStorage.getItem('admin_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export async function apiGet<T = any>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { headers: { ...authHeader() } });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function apiPost<T = any>(path: string, body: any): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function apiPatch<T = any>(path: string, body: any): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+
+export async function apiPut<T = any>(path: string, body: any): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+
+export async function apiDelete<T = any>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'DELETE',
+    headers: authHeader(),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+```
+
+### Firebase config (`src/lib/firebase.ts`)
+
+Use this exact config (already in the existing bundle):
+
+```typescript
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDZLiJ10JAmKORn9-1C0s3mfBxjiazmXYg",
+  authDomain: "ai-studio-applet-webapp-c731c.firebaseapp.com",
+  projectId: "ai-studio-applet-webapp-c731c",
+  storageBucket: "ai-studio-applet-webapp-c731c.firebasestorage.app",
+  messagingSenderId: "546612897934",
+  appId: "1:546612897934:web:407a4b7a2c4608eee681df",
+};
+
+export const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+export const db = getFirestore(app);
+export const OWNER_EMAIL = 'gmsgroupofindustries@gmail.com';
+```
+
+### Admin login flow (`AdminLoginModal.tsx`)
+
+1. Email/password → `apiPost('/auth/login', {email, password})` → store returned `token` in `localStorage.setItem('admin_token', token)`.
+2. Google one-click → sign in with Firebase → get ID token via `getIdToken()` → `apiPost('/auth/google-admin', {email: user.email, firebaseIdToken: idToken})` → store token.
+3. On success, close modal and call `onRefreshData()` to load admin dashboard.
+
+### Store contact info (used in Header & WhatsApp ordering)
+
+```typescript
+export const STORE_INFO = {
+  phone: '+8801974060224',
+  whatsapp: '8801974060224',
+  email: 'marianatrench6900@gmail.com',
+  address: 'Jashore Sadar, 7400, Bangladesh',
+  name: 'Bismillah Motors',
+  tagline: 'Experience the Quality',
+};
+```
+
+### Design system
+
+- Dark top bar (zinc-950 bg, zinc-300 text, red-500 accents)
+- White header with red-600 primary CTA color
+- Tailwind 4 (use `@import "tailwindcss"` in `index.css`)
+- Fonts: Plus Jakarta Sans (body) + Oswald (display)
+- Logo: `/logo.jpg` in `public/`
+
+### Static fallback behavior
+
+If `/api/*` requests fail (e.g. API temporarily down), the app should fall back to fetching from `/data/*.json`. Implement this in `lib/api.ts`:
+
+```typescript
+export async function getProducts(): Promise<Product[]> {
+  try {
+    const res = await apiGet<{products: Product[]}>('/products?limit=100');
+    return res.products ?? [];
+  } catch {
+    const res = await fetch('/data/products.json');
+    return res.json();
+  }
+}
+```
+
+Apply the same pattern to categories, brands, bike-brands.
+
+---
+
+## GitHub Actions workflow (`.github/workflows/build.yml`)
+
+The workflow must:
+
+1. Trigger on `push` to `main` and on manual `workflow_dispatch`.
+2. Checkout the repo.
+3. Setup Node 20.
+4. `cd frontend && npm ci && npm run build`.
+5. Assemble a staging folder `bismillah-motors-cpanel/` containing:
+   - `frontend/dist/*` (index.html, assets/, logo.jpg, data/, etc.)
+   - `backend/api/*` (the PHP folder, renamed `api/`)
+   - `backend/schema.sql`
+   - `backend/.htaccess.template` → renamed to `.htaccess`
+   - `README.md` (root of the repo)
+6. Zip the staging folder as `bismillah-motors-cpanel.zip`.
+7. Upload the zip as a GitHub Actions **artifact** using `actions/upload-artifact@v4` with name `bismillah-motors-cpanel`.
+8. (Optional) On git tags `v*`, also create a GitHub Release with the zip attached.
+
+Reference workflow template:
+
+```yaml
+name: Build cPanel Deploy Package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install & build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble deploy folder
+        run: |
+          mkdir -p staging/bismillah-motors-cpanel
+          # Frontend build output
+          cp -r frontend/dist/. staging/bismillah-motors-cpanel/
+          # PHP backend
+          cp -r backend/api staging/bismillah-motors-cpanel/api
+          # Schema + htaccess + README
+          cp backend/schema.sql staging/bismillah-motors-cpanel/
+          cp backend/.htaccess.template staging/bismillah-motors-cpanel/.htaccess
+          cp README.md staging/bismillah-motors-cpanel/
+          # Remove any nested zip artifacts accidentally copied
+          find staging -name "*.zip" -delete
+
+      - name: Zip deploy package
+        run: |
+          cd staging
+          zip -r bismillah-motors-cpanel.zip bismillah-motors-cpanel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bismillah-motors-cpanel
+          path: staging/bismillah-motors-cpanel.zip
+          retention-days: 90
+
+      - name: Attach to release (if release event)
+        if: github.event_name == 'release'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: staging/bismillah-motors-cpanel.zip
+          asset_name: bismillah-motors-cpanel.zip
+          asset_content_type: application/zip
+```
+
+After the workflow runs, the user opens the repo → **Actions tab** → clicks the latest run → scrolls to **Artifacts** → downloads `bismillah-motors-cpanel.zip`.
+
+---
+
+## README.md (in repo root and inside the final zip)
+
+```markdown
+# Bismillah Motors — cPanel Deployment Guide
+
+## Step 1: Buy hosting
+Any shared cPanel hosting with PHP 7.4+ and MySQL works. Recommended:
+- Hostinger Premium/Business
+- Namecheap Stellar Plus
+- A2 Hosting Swift
+
+## Step 2: Download the build zip
+1. Go to the GitHub repo → **Actions** tab.
+2. Click the latest successful run.
+3. Scroll to **Artifacts** → download `bismillah-motors-cpanel.zip`.
+4. Extract it on your computer. You'll see a folder `bismillah-motors-cpanel/`.
+
+## Step 3: Create the database in cPanel
+1. cPanel → **MySQL Databases**.
+2. Create a new database, e.g. `youruser_bismillah`.
+3. Create a new DB user, e.g. `youruser_bismillah_user`, with a strong password.
+4. Add the user to the database with **ALL PRIVILEGES**.
+
+## Step 4: Import the schema
+1. cPanel → **phpMyAdmin**.
+2. Click your database on the left.
+3. Click **Import**.
+4. Choose the `schema.sql` file from the extracted folder.
+5. Click **Go**. You should see "Import has been successfully finished".
+
+## Step 5: Edit config.php
+Open `bismillah-motors-cpanel/api/config.php` in a text editor and set:
+- `DB_NAME`, `DB_USER`, `DB_PASS` (from Step 3)
+- `JWT_SECRET` (generate one: visit https://www.random.org/cgi-bin/randbyte?nbytes=32&format=h and paste the result)
+
+## Step 6: Upload files
+1. cPanel → **File Manager** → `public_html`.
+2. Upload everything from the `bismillah-motors-cpanel/` folder into `public_html/`.
+3. Make sure `.htaccess` is uploaded (it's a hidden file — enable "Show Hidden Files" in File Manager's settings if you don't see it).
+4. Make sure the `api/` folder is at `public_html/api/`.
+
+## Step 7: Visit your site
+Open your domain in the browser. You should see:
+- Homepage with products
+- Working search, filters, cart, checkout
+- Order tracking
+- Admin login (click the "Admin Portal" link in the top bar)
+
+## Default admin credentials
+- Email: `admin@bismillahmotorsbd.com`
+- Password: `admin123`
+
+**Change the password immediately after first login.** Use phpMyAdmin to run:
+```sql
+-- Generate a new hash on https://bcrypt-generator.com/ then:
+UPDATE admins SET password_hash = 'YOUR_NEW_BCRYPT_HASH' WHERE email = 'admin@bismillahmotorsbd.com';
+```
+
+## Verifying the API
+Visit `https://yourdomain.com/api/products?limit=5` in your browser. You should see a JSON response. If you see the React HTML instead, your `.htaccess` didn't upload correctly — re-upload it and enable hidden files in File Manager.
+
+## Troubleshooting
+- **500 Internal Server Error on /api/***: Check `api/config.php` — wrong DB credentials, or PDO MySQL extension is disabled in cPanel (extremely rare).
+- **404 on /api/***: `.htaccess` is missing or `mod_rewrite` is disabled. Most cPanel hosts enable mod_rewrite by default.
+- **Order placement fails**: Check browser DevTools → Network tab. The POST to `/api/orders` should return 200 with `{orderId, ...}`.
+- **Admin login fails**: Verify the `admins` table has rows. If not, re-import `schema.sql`.
+- **Google one-click admin login fails**: Verify your Firebase project's authorized domains include your cPanel domain (Firebase Console → Authentication → Settings → Authorized domains).
+
+## Backup
+Set up a weekly cPanel backup that includes the `public_html/api/` folder and the MySQL database.
+```
+
+---
+
+## What you must output
+
+Generate the **entire repository** described above. Every file must be fully implemented — no `// TODO`, no `// implement this`, no `die('not implemented')`. The PHP must work on PHP 7.4+. The React app must build cleanly with `npm run build`. The GitHub Actions workflow must run green.
+
+Then bundle everything into a single downloadable zip the user can clone/push to GitHub.
+
+## Verification checklist before you finish
+
+- [ ] `cd frontend && npm ci && npm run build` succeeds with no errors
+- [ ] `frontend/dist/index.html` exists and references the built assets
+- [ ] `backend/api/index.php` routes all endpoints correctly
+- [ ] `backend/api/config.php` has all required constants with clear placeholder values
+- [ ] `backend/schema.sql` imports cleanly into a fresh MySQL 5.7+/8.0 database
+- [ ] `backend/.htaccess.template` routes `/api/*` and SPA fallback correctly
+- [ ] `.github/workflows/build.yml` runs green and produces a downloadable artifact
+- [ ] README.md has step-by-step cPanel setup instructions
+- [ ] No hardcoded `localhost`, `127.0.0.1`, or absolute URLs in the production code
+- [ ] No `console.log` left in production frontend (use a debug flag)
+- [ ] No secrets (Firebase API keys are fine — they're public client keys — but no service-account JSON or DB passwords committed)
+- [ ] `products.json`, `categories.json`, `brands.json`, `bike-brands.json`, `districts.json` are present in `frontend/public/data/` as fallback data
+- [ ] Admin password in schema.sql is bcrypt-hashed (not plaintext)
+
+## Style reminders for the React app
+
+- Keep the existing Bismillah Motors visual identity: dark zinc-950 top bar, red-600 primary, white header, Plus Jakarta Sans + Oswald fonts, `/logo.jpg` everywhere
+- The header must show: phone `+8801974060224`, address `Jashore Sadar, 7400, Bangladesh`, "100% Genuine OEM Parts Guaranteed" badge, Track Order button, Admin Portal button, Google sign-in / account dropdown, cart button
+- The footer must show: store name, contact info, quick links, payment methods note ("Cash on Delivery available across all 64 districts of Bangladesh")
+- All prices in Bangladeshi Taka (৳) — format as `৳ 1,234`
+
+Now generate the complete repo and the downloadable zip.

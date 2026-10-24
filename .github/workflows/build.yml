@@ -25,17 +25,19 @@ jobs:
         run: |
           npm install --legacy-peer-deps
 
-      - name: Build Static Site with Vite
+      - name: Build Static Site & PHP Backend
         run: |
           npm run build
         env:
           NODE_ENV: production
 
-      - name: Verify Build Output and .htaccess
+      - name: Verify Build Output and PHP API
         run: |
           test -f dist/index.html || { echo "❌ dist/index.html is missing!"; exit 1; }
           test -f dist/.htaccess || { echo "❌ dist/.htaccess is missing!"; exit 1; }
-          echo "✅ Production static build verified successfully!"
+          test -f dist/api/index.php || { echo "❌ dist/api/index.php is missing!"; exit 1; }
+          test -f dist/schema.sql || { echo "❌ dist/schema.sql is missing!"; exit 1; }
+          echo "✅ cPanel package verified successfully!"
           ls -la dist/
 
       - name: Create Ready-to-Upload cPanel ZIP
@@ -48,9 +50,9 @@ jobs:
       - name: Upload cPanel ZIP Archive (Direct Download)
         uses: actions/upload-artifact@v4
         with:
-          name: bismillah-motors-cpanel-zip
+          name: bismillah-motors-cpanel
           path: bismillah-motors-cpanel.zip
-          retention-days: 30
+          retention-days: 90
 
       - name: Upload dist Folder Artifact
         uses: actions/upload-artifact@v4
