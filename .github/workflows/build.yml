@@ -1,0 +1,67 @@
+name: Build & Package Static Site for cPanel
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab anytime
+
+jobs:
+  build-and-package:
+    name: Build & Generate cPanel Artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: |
+          npm ci || npm install
+
+      - name: Build Static Site with Vite & Prisma
+        run: |
+          npm run build
+        env:
+          NODE_ENV: production
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+
+      - name: Verify Build Output and .htaccess
+        run: |
+          test -f dist/index.html || { echo "❌ dist/index.html is missing!"; exit 1; }
+          test -f dist/.htaccess || { echo "❌ dist/.htaccess is missing!"; exit 1; }
+          echo "✅ Production static build verified successfully!"
+          ls -la dist/
+
+      - name: Create Ready-to-Upload cPanel ZIP
+        run: |
+          cd dist
+          zip -r ../bismillah-motors-cpanel.zip .
+          cd ..
+          ls -lh bismillah-motors-cpanel.zip
+
+      - name: Upload cPanel ZIP Archive (Direct Download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bismillah-motors-cpanel-zip
+          path: bismillah-motors-cpanel.zip
+          retention-days: 30
+
+      - name: Upload dist Folder Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-folder
+          path: dist/
+          retention-days: 30
